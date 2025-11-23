@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebNotes</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>WebNotes</h1>
+      <p class="subtitle">Save highlights to Notion</p>
+    </div>
+
+    <div id="auth-section" class="section">
+      <div class="status" id="auth-status">
+        <span class="status-indicator" id="status-indicator"></span>
+        <span id="status-text">Checking authentication...</span>
+      </div>
+      
+      <div id="not-authenticated" class="auth-content" style="display: none;">
+        <div id="main-connect" style="display: none;">
+          <button id="connect-notion-btn" class="btn btn-primary btn-large">
+            <span>🔗 Connect your Notion account</span>
+          </button>
+          <div id="oauth-progress" style="display: none; margin-top: 12px; padding: 12px; background: #f0f7ff; border-radius: 6px; font-size: 12px;">
+            <div id="oauth-step" style="font-weight: 500; margin-bottom: 4px;">Connecting...</div>
+            <div id="oauth-details" style="color: #666; font-size: 11px;"></div>
+          </div>
+          <p class="help-text" style="margin-top: 12px; text-align: center;">
+            <a href="#" id="setup-link" style="color: #007AFF; text-decoration: none; font-size: 12px;">
+              First time? Set up OAuth credentials
+            </a>
+          </p>
+        </div>
+
+        <div id="oauth-setup" style="display: none;">
+          <div class="instructions">
+            <h3>One-time Setup (Required):</h3>
+            <ol>
+              <li>Go to <a href="https://www.notion.so/my-integrations" target="_blank">Notion Integrations</a></li>
+              <li>Click "New integration" → Select <strong>"Public integration"</strong></li>
+              <li>Name it "WebNotes" and fill in the details</li>
+              <li>Add this redirect URI (copy exactly): 
+                <div style="display: flex; gap: 4px; margin-top: 4px; align-items: center;">
+                  <code id="redirect-uri-display" style="flex: 1; user-select: all; cursor: text; padding: 6px; background: #f5f5f5; border-radius: 4px; font-size: 11px;"></code>
+                  <button id="copy-redirect-uri-btn" style="padding: 6px 12px; background: #007AFF; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Copy</button>
+                </div>
+              </li>
+              <li style="color: #d32f2f; font-weight: 500; margin-top: 8px;">⚠️ Make sure the redirect URI in Notion matches exactly (including https://)</li>
+              <li>Copy your <strong>OAuth client ID</strong> and <strong>OAuth client secret</strong></li>
+              <li>Paste them below</li>
+            </ol>
+          </div>
+          <div class="input-group">
+            <label for="notion-client-id">OAuth Client ID:</label>
+            <input type="text" id="notion-client-id" placeholder="Your OAuth client ID">
+          </div>
+          <div class="input-group">
+            <label for="notion-client-secret">OAuth Client Secret:</label>
+            <div style="position: relative;">
+              <input type="password" id="notion-client-secret" placeholder="Your OAuth client secret" style="padding-right: 40px;">
+              <button type="button" id="toggle-secret-visibility" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; padding: 4px; color: #666;" title="Show/Hide">
+                <span id="visibility-icon">👁️</span>
+              </button>
+            </div>
+          </div>
+          <button id="save-oauth-credentials-btn" class="btn btn-primary">Save & Continue</button>
+          <div id="credentials-debug" style="margin-top: 12px; padding: 8px; background: #fff3cd; border-radius: 4px; font-size: 11px; display: none;">
+            <strong>Debug Info:</strong><br>
+            <span id="client-id-preview"></span><br>
+            <span id="client-secret-preview"></span><br>
+            <span id="redirect-uri-preview"></span>
+          </div>
+          <p class="help-text" style="text-align: center; margin-top: 8px;">
+            <a href="#" id="hide-setup-link" style="color: #007AFF; text-decoration: none; font-size: 12px;">
+              ← Back
+            </a>
+          </p>
+        </div>
+
+        <div id="database-selection" style="display: none;">
+          <p style="margin-bottom: 12px;">Select the database where you want to save highlights:</p>
+          <div class="input-group">
+            <select id="database-select">
+              <option value="">Loading databases...</option>
+            </select>
+          </div>
+          <button id="save-database-btn" class="btn btn-primary btn-large" style="margin-top: 8px;">
+            Save Database
+          </button>
+        </div>
+      </div>
+
+      <div id="authenticated" class="auth-content" style="display: none;">
+        <button id="connected-status-btn" class="btn btn-success btn-large" disabled>
+          <span>✓ Connected to Notion</span>
+        </button>
+        <p id="workspace-info" class="help-text" style="margin-top: 12px; text-align: center;"></p>
+        <button id="disconnect-btn" class="btn btn-secondary" style="margin-top: 8px;">Disconnect</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Controls</h3>
+      <button id="toggle-highlight-btn" class="btn btn-primary btn-large">
+        <span id="highlight-btn-text">Enable Highlighting</span>
+      </button>
+      <p class="help-text">Click to enable/disable text highlighting mode</p>
+    </div>
+
+    <div class="section">
+      <h3>About</h3>
+      <p class="help-text">
+        Select text on any webpage and save it to your Notion database. 
+        Highlights persist across page visits.
+      </p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

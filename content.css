@@ -1,0 +1,61 @@
+.webnotes-highlight {
+  background-color: rgba(255, 255, 0, 0.3);
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.2s;
+}
+
+.webnotes-highlight:hover {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
+.webnotes-highlight.active {
+  background-color: rgba(255, 200, 0, 0.5);
+}
+
+.webnotes-highlight-menu {
+  position: fixed !important;
+  background: white !important;
+  border: 1px solid #ccc !important;
+  border-radius: 4px !important;
+  padding: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  z-index: 2147483647 !important; /* Maximum z-index */
+  display: flex !important;
+  gap: 8px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-size: 14px !important;
+  pointer-events: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.webnotes-highlight-menu button {
+  background: #007AFF;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.webnotes-highlight-menu button:hover {
+  background: #0056CC;
+}
+
+.webnotes-highlight-menu button.delete {
+  background: #FF3B30;
+}
+
+.webnotes-highlight-menu button.delete:hover {
+  background: #CC2E24;
+}
+
+.webnotes-selection-indicator {
+  position: absolute;
+  background: rgba(0, 122, 255, 0.2);
+  pointer-events: none;
+  z-index: 9999;
+}
+
