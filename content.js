@@ -469,6 +469,13 @@ class WebNotesHighlighter {
     chrome.runtime.sendMessage({
       action: 'deleteFromNotion',
       highlightId: highlightId
+    }, async (response) => {
+      console.dir(response);
+      if (response.success) {
+        console.log('Highlight deleted from Notion');
+      } else {
+        console.error('Failed to delete highlight from Notion:', response.error);
+      }
     });
   }
 
@@ -493,6 +500,7 @@ class WebNotesHighlighter {
       });
 
       if (response.success && response.highlights) {
+        console.dir(response.highlights);
         console.log(`Loaded ${response.highlights.length} highlights from Notion for ${domain}`);
         response.highlights.forEach(highlight => {
           this.highlights.set(highlight.id, highlight);
