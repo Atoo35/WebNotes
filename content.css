@@ -15,33 +15,56 @@
 
 .webnotes-highlight-menu {
   position: fixed !important;
-  background: white !important;
-  border: 1px solid #ccc !important;
-  border-radius: 4px !important;
-  padding: 8px !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
   z-index: 2147483647 !important; /* Maximum z-index */
   display: flex !important;
-  gap: 8px !important;
+  gap: 0 !important;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
   font-size: 14px !important;
   pointer-events: auto !important;
   visibility: visible !important;
   opacity: 1 !important;
+  touch-action: manipulation !important;
 }
 
 .webnotes-highlight-menu button {
   background: #007AFF;
   color: white;
   border: none;
-  padding: 6px 12px;
-  border-radius: 4px;
+  padding: 8px;
+  border-radius: 50%;
   cursor: pointer;
   font-size: 12px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+  pointer-events: auto !important;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .webnotes-highlight-menu button:hover {
   background: #0056CC;
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.4);
+}
+
+.webnotes-highlight-menu button:active {
+  transform: scale(0.95);
+}
+
+.webnotes-highlight-menu button svg {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
 }
 
 .webnotes-highlight-menu button.delete {

@@ -113,6 +113,42 @@ class NotionIntegration {
                     }
                     break;
 
+                case 'createDatabase':
+                    try {
+                        const database = await this.createDatabase(request.parentPageId);
+                        sendResponse({ success: true, database });
+                    } catch (error) {
+                        sendResponse({ success: false, error: error.message || 'Failed to create database' });
+                    }
+                    break;
+
+                case 'createDatabaseAuto':
+                    try {
+                        const result = await this.createDatabaseAuto();
+                        sendResponse(result);
+                    } catch (error) {
+                        sendResponse({ success: false, error: error.message || 'Failed to create database' });
+                    }
+                    break;
+
+                case 'loadHighlightsFromNotion':
+                    try {
+                        const highlights = await this.loadHighlightsFromNotion(request.url, request.domain);
+                        sendResponse({ success: true, highlights });
+                    } catch (error) {
+                        sendResponse({ success: false, error: error.message || 'Failed to load highlights' });
+                    }
+                    break;
+
+                case 'loadHighlightsByDomain':
+                    try {
+                        const highlights = await this.loadHighlightsByDomain(request.domain);
+                        sendResponse({ success: true, highlights });
+                    } catch (error) {
+                        sendResponse({ success: false, error: error.message || 'Failed to load highlights' });
+                    }
+                    break;
+
                 default:
                     sendResponse({ success: false, error: 'Unknown action' });
             }
@@ -122,11 +158,98 @@ class NotionIntegration {
         }
     }
 
+    async ensureDatabaseProperties () {
+        if (!this.accessToken || !this.databaseId) {
+            return;
+        }
+
+        try {
+            // Get current database schema
+            const dbResponse = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'Notion-Version': '2022-06-28'
+                }
+            });
+
+            if (!dbResponse.ok) {
+                console.warn('Could not fetch database schema');
+                return;
+            }
+
+            const database = await dbResponse.json();
+            const existingProperties = database.properties || {};
+
+            // Define required properties with their types
+            const requiredProperties = {
+                'Title': { type: 'title' },
+                'URL': { type: 'url' },
+                'Page Title': { type: 'rich_text' },
+                'Domain': { type: 'rich_text' },
+                'Date': { type: 'date' },
+                'Highlight ID': { type: 'rich_text' },
+                'Selector': { type: 'rich_text' }
+            };
+
+            // Check which properties are missing
+            const missingProperties = {};
+            for (const [propName, propConfig] of Object.entries(requiredProperties)) {
+                if (!existingProperties[propName]) {
+                    missingProperties[propName] = propConfig;
+                }
+            }
+
+            // If no properties are missing, we're done
+            if (Object.keys(missingProperties).length === 0) {
+                return;
+            }
+
+            // Update database to add missing properties
+            const updatePayload = {};
+            for (const [propName, propConfig] of Object.entries(missingProperties)) {
+                if (propConfig.type === 'title') {
+                    updatePayload[propName] = { title: {} };
+                } else if (propConfig.type === 'url') {
+                    updatePayload[propName] = { url: {} };
+                } else if (propConfig.type === 'rich_text') {
+                    updatePayload[propName] = { rich_text: {} };
+                } else if (propConfig.type === 'date') {
+                    updatePayload[propName] = { date: {} };
+                }
+            }
+
+            const updateResponse = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'Content-Type': 'application/json',
+                    'Notion-Version': '2022-06-28'
+                },
+                body: JSON.stringify({
+                    properties: updatePayload
+                })
+            });
+
+            if (updateResponse.ok) {
+                console.log('Successfully added missing properties to database:', Object.keys(missingProperties));
+            } else {
+                const errorText = await updateResponse.text();
+                console.warn('Could not update database properties:', errorText);
+            }
+        } catch (error) {
+            console.error('Error ensuring database properties:', error);
+        }
+    }
+
     async saveHighlightToNotion (highlight) {
         if (!this.accessToken || !this.databaseId) {
             console.warn('Not authenticated or database not set up');
             return;
         }
+
+        // Ensure all required properties exist before saving
+        await this.ensureDatabaseProperties();
 
         try {
             const response = await fetch(`${this.notionApiUrl}/pages`, {
@@ -184,6 +307,15 @@ class NotionIntegration {
                                     }
                                 }
                             ]
+                        },
+                        'Selector': {
+                            rich_text: [
+                                {
+                                    text: {
+                                        content: JSON.stringify(highlight.selector || {})
+                                    }
+                                }
+                            ]
                         }
                     },
                     children: [
@@ -225,6 +357,15 @@ class NotionIntegration {
             }
 
             const data = await response.json();
+
+            // Invalidate cache for this domain so it refreshes on next load
+            if (highlight.domain) {
+                const cacheKey = `highlights_cache_${highlight.domain}`;
+                chrome.storage.local.remove([cacheKey], () => {
+                    console.log(`Invalidated cache for domain: ${highlight.domain}`);
+                });
+            }
+
             return data;
         } catch (error) {
             console.error('Error saving to Notion:', error);
@@ -616,6 +757,324 @@ class NotionIntegration {
 
         } catch (error) {
             console.error('Error listing databases:', error);
+            throw error;
+        }
+    }
+
+    async loadHighlightsByDomain (domain) {
+        if (!this.accessToken || !this.databaseId) {
+            console.warn('Not authenticated or database not set up');
+            return [];
+        }
+
+        try {
+            // Query all highlights for this domain
+            const response = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}/query`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'Content-Type': 'application/json',
+                    'Notion-Version': '2022-06-28'
+                },
+                body: JSON.stringify({
+                    filter: {
+                        property: 'Domain',
+                        rich_text: {
+                            equals: domain
+                        }
+                    },
+                    sorts: [
+                        {
+                            property: 'Date',
+                            direction: 'descending'
+                        }
+                    ],
+                    page_size: 100
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Failed to load highlights: ${errorText}`);
+            }
+
+            const data = await response.json();
+            return this.parseHighlightsFromNotion(data.results || []);
+
+        } catch (error) {
+            console.error('Error loading highlights by domain:', error);
+            throw error;
+        }
+    }
+
+    parseHighlightsFromNotion (pages) {
+        const highlights = [];
+
+        for (const page of pages) {
+            try {
+                const props = page.properties;
+
+                // Extract selector
+                let selector = {};
+                if (props.Selector && props.Selector.rich_text && props.Selector.rich_text.length > 0) {
+                    const selectorText = props.Selector.rich_text[0].text.content;
+                    try {
+                        selector = JSON.parse(selectorText);
+                    } catch (e) {
+                        console.warn('Failed to parse selector:', e);
+                    }
+                }
+
+                // Extract highlight ID
+                let highlightId = '';
+                if (props['Highlight ID'] && props['Highlight ID'].rich_text && props['Highlight ID'].rich_text.length > 0) {
+                    highlightId = props['Highlight ID'].rich_text[0].text.content;
+                }
+
+                // Extract text - try to get from page content blocks first
+                let text = '';
+                // Note: We'll fetch full text when needed, for now use title
+                if (props.Title && props.Title.title && props.Title.title.length > 0) {
+                    text = props.Title.title[0].text.content;
+                }
+
+                // Extract other properties
+                const pageUrl = props.URL?.url || '';
+                const pageTitle = props['Page Title']?.rich_text?.[0]?.text?.content || '';
+                const domain = props.Domain?.rich_text?.[0]?.text?.content || '';
+                const timestamp = props.Date?.date?.start || new Date().toISOString();
+
+                highlights.push({
+                    id: highlightId,
+                    text: text,
+                    url: pageUrl,
+                    title: pageTitle,
+                    domain: domain,
+                    selector: selector,
+                    timestamp: timestamp,
+                    notionPageId: page.id // Store for later full text fetch
+                });
+            } catch (error) {
+                console.error('Error parsing highlight from Notion:', error, page);
+            }
+        }
+
+        return highlights;
+    }
+
+    async loadHighlightsFromNotion (url, domain) {
+        if (!this.accessToken || !this.databaseId) {
+            console.warn('Not authenticated or database not set up');
+            return [];
+        }
+
+        try {
+            // First try to get from cache
+            const cacheKey = `highlights_cache_${domain}`;
+            const cacheResult = await chrome.storage.local.get([cacheKey]);
+            const cached = cacheResult[cacheKey];
+
+            if (cached && cached.timestamp && (Date.now() - cached.timestamp < 5 * 60 * 1000)) {
+                // Cache is less than 5 minutes old, filter by URL and return
+                const filtered = cached.highlights.filter(h => h.url === url);
+                console.log(`Using cached highlights for domain ${domain}, filtered to ${filtered.length} for URL`);
+                return filtered;
+            }
+
+            // Cache miss or expired, fetch from Notion by domain
+            console.log(`Fetching highlights from Notion for domain: ${domain}`);
+            const allDomainHighlights = await this.loadHighlightsByDomain(domain);
+
+            // Cache all domain highlights
+            await chrome.storage.local.set({
+                [cacheKey]: {
+                    highlights: allDomainHighlights,
+                    timestamp: Date.now()
+                }
+            });
+
+            // Filter by URL and return
+            const filtered = allDomainHighlights.filter(h => h.url === url);
+            return filtered;
+
+        } catch (error) {
+            console.error('Error loading highlights from Notion:', error);
+            // Try to use cache even if expired
+            const cacheKey = `highlights_cache_${domain}`;
+            const cacheResult = await chrome.storage.local.get([cacheKey]);
+            if (cacheResult[cacheKey] && cacheResult[cacheKey].highlights) {
+                console.log('Using expired cache due to error');
+                return cacheResult[cacheKey].highlights.filter(h => h.url === url);
+            }
+            throw error;
+        }
+    }
+
+    async createDatabaseAuto () {
+        if (!this.accessToken) {
+            throw new Error('Not authenticated');
+        }
+
+        try {
+            // First, try to find an existing WebNotes database
+            const databases = await this.listDatabases();
+            const existingDb = databases.find(db => {
+                const title = db.title?.[0]?.plain_text || db.title?.[0]?.text?.content || '';
+                return title.toLowerCase().includes('webnotes') || title.toLowerCase().includes('highlights');
+            });
+
+            if (existingDb) {
+                console.log('Found existing WebNotes database:', existingDb.id);
+                await this.setDatabaseId(existingDb.id);
+                return { success: true, databaseId: existingDb.id, created: false };
+            }
+
+            // If no existing database, create a new page first, then database
+            // Try to create a page in the user's workspace
+            let parentPageId = null;
+
+            try {
+                const pageResponse = await fetch(`${this.notionApiUrl}/pages`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Content-Type': 'application/json',
+                        'Notion-Version': '2022-06-28'
+                    },
+                    body: JSON.stringify({
+                        parent: {
+                            type: 'workspace',
+                            workspace: true
+                        },
+                        properties: {
+                            title: {
+                                title: [
+                                    {
+                                        text: {
+                                            content: 'WebNotes - My Highlights'
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    })
+                });
+
+                if (pageResponse.ok) {
+                    const page = await pageResponse.json();
+                    parentPageId = page.id;
+                } else {
+                    // If workspace creation fails, try to find an existing page to use as parent
+                    console.log('Workspace page creation failed, searching for existing pages...');
+                    const searchResponse = await fetch(`${this.notionApiUrl}/search`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.accessToken}`,
+                            'Content-Type': 'application/json',
+                            'Notion-Version': '2022-06-28'
+                        },
+                        body: JSON.stringify({
+                            filter: {
+                                property: 'object',
+                                value: 'page'
+                            },
+                            page_size: 1
+                        })
+                    });
+
+                    if (searchResponse.ok) {
+                        const searchData = await searchResponse.json();
+                        if (searchData.results && searchData.results.length > 0) {
+                            parentPageId = searchData.results[0].id;
+                            console.log('Using existing page as parent:', parentPageId);
+                        }
+                    }
+                }
+            } catch (pageError) {
+                console.error('Error creating or finding parent page:', pageError);
+            }
+
+            if (!parentPageId) {
+                throw new Error('Could not create or find a parent page for the database. Please create a database manually or ensure your integration has access to create pages.');
+            }
+
+            // Now create the database as a child of this page
+            const database = await this.createDatabase(parentPageId);
+
+            if (database && database.id) {
+                await this.setDatabaseId(database.id);
+                return { success: true, databaseId: database.id, created: true };
+            }
+
+            throw new Error('Database creation failed');
+
+        } catch (error) {
+            console.error('Error in createDatabaseAuto:', error);
+            throw error;
+        }
+    }
+
+    async createDatabase (parentPageId) {
+        if (!this.accessToken) {
+            throw new Error('Not authenticated');
+        }
+
+        try {
+            const response = await fetch(`${this.notionApiUrl}/databases`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`,
+                    'Content-Type': 'application/json',
+                    'Notion-Version': '2022-06-28'
+                },
+                body: JSON.stringify({
+                    parent: {
+                        type: 'page_id',
+                        page_id: parentPageId
+                    },
+                    title: [
+                        {
+                            text: {
+                                content: 'WebNotes Highlights'
+                            }
+                        }
+                    ],
+                    properties: {
+                        'Title': {
+                            title: {}
+                        },
+                        'URL': {
+                            url: {}
+                        },
+                        'Page Title': {
+                            rich_text: {}
+                        },
+                        'Domain': {
+                            rich_text: {}
+                        },
+                        'Date': {
+                            date: {}
+                        },
+                        'Highlight ID': {
+                            rich_text: {}
+                        },
+                        'Selector': {
+                            rich_text: {}
+                        }
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Failed to create database: ${errorText}`);
+            }
+
+            const database = await response.json();
+            return database;
+
+        } catch (error) {
+            console.error('Error creating database:', error);
             throw error;
         }
     }

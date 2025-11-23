@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   await checkAuthStatus();
+  await updateHighlightButtonState();
   setupEventListeners();
 });
 
@@ -136,6 +137,34 @@ async function loadDatabases () {
     console.error('Error loading databases:', error);
     select.innerHTML = `<option value="">Error: ${error.message || 'Failed to load databases'}</option>`;
     select.disabled = true;
+  }
+}
+
+async function updateHighlightButtonState () {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) return;
+
+    // Check global preference first (defaults to true/enabled)
+    chrome.storage.local.get(['highlightingEnabled'], (globalResult) => {
+      const globalEnabled = globalResult.highlightingEnabled !== false; // Default to true
+
+      // Try to get state from content script
+      chrome.tabs.sendMessage(tab.id, { action: 'getHighlightState' }, (response) => {
+        const btnText = document.getElementById('highlight-btn-text');
+        if (btnText) {
+          if (chrome.runtime.lastError) {
+            // Content script not ready, use global preference
+            btnText.textContent = globalEnabled ? 'Disable Highlighting' : 'Enable Highlighting';
+          } else {
+            const isEnabled = response?.isHighlightMode !== undefined ? response.isHighlightMode : globalEnabled;
+            btnText.textContent = isEnabled ? 'Disable Highlighting' : 'Enable Highlighting';
+          }
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Error updating highlight button state:', error);
   }
 }
 
@@ -336,7 +365,38 @@ function setupEventListeners () {
           }
 
           oauthStep.textContent = '✓ Connected!';
-          oauthDetails.textContent = `Workspace: ${response.workspaceName || 'Connected'}`;
+          oauthDetails.textContent = 'Setting up database...';
+
+          // Automatically create database if it doesn't exist
+          try {
+            const dbResult = await new Promise((resolve) => {
+              chrome.runtime.sendMessage({ action: 'createDatabaseAuto' }, (result) => {
+                if (chrome.runtime.lastError) {
+                  resolve({ success: false, error: chrome.runtime.lastError.message });
+                } else {
+                  resolve(result);
+                }
+              });
+            });
+
+            if (dbResult.success) {
+              if (dbResult.created) {
+                oauthStep.textContent = '✓ Database created!';
+                oauthDetails.textContent = 'Your WebNotes database has been automatically created in Notion.';
+              } else {
+                oauthStep.textContent = '✓ Using existing database';
+                oauthDetails.textContent = 'Found your existing WebNotes database.';
+              }
+            } else {
+              console.warn('Database creation failed:', dbResult.error);
+              oauthStep.textContent = '✓ Connected (manual setup needed)';
+              oauthDetails.textContent = `Connected! Please select a database manually. Error: ${dbResult.error || 'Unknown error'}`;
+            }
+          } catch (error) {
+            console.error('Error creating database:', error);
+            oauthStep.textContent = '✓ Connected (manual setup needed)';
+            oauthDetails.textContent = 'Connected! Please select a database manually.';
+          }
 
           // Update button to show success briefly
           connectBtn.innerHTML = '<span>✓ Connected!</span>';
@@ -346,7 +406,7 @@ function setupEventListeners () {
           setTimeout(async () => {
             oauthProgress.style.display = 'none';
             await checkAuthStatus();
-          }, 1500);
+          }, 2000);
         } else {
           oauthStep.textContent = '✗ Connection failed';
           oauthDetails.innerHTML = `<span style="color: #d32f2f;">${response.error || 'Unknown error'}</span><br><br>Redirect URI: <code style="font-size: 10px;">${redirectUri}</code>`;
@@ -429,52 +489,41 @@ function setupEventListeners () {
           return;
         }
 
-        // Check if content script is already loaded by trying to ping it
-        let contentScriptReady = false;
-        try {
-          chrome.tabs.sendMessage(tab.id, { action: 'ping' }, (response) => {
-            if (!chrome.runtime.lastError) {
-              contentScriptReady = true;
+        // Content script is loaded via manifest, just ping to ensure it's ready
+        // Don't inject programmatically to avoid double initialization
+        let retries = 0;
+        const maxRetries = 5;
+
+        const sendToggleMessage = () => {
+          chrome.tabs.sendMessage(tab.id, { action: 'toggleHighlight' }, async (response) => {
+            if (chrome.runtime.lastError) {
+              if (retries < maxRetries) {
+                retries++;
+                await new Promise(resolve => setTimeout(resolve, 200));
+                sendToggleMessage();
+                return;
+              }
+              console.error('Error sending message:', chrome.runtime.lastError);
+              alert('Could not enable highlighting. Please refresh the page and try again.');
+              return;
             }
-          });
-        } catch (e) {
-          // Content script not ready
-        }
 
-        // Only inject if not already loaded (content_scripts in manifest should handle it)
-        // But some pages might need programmatic injection
-        if (!contentScriptReady) {
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              files: ['content.js']
+            // Get current state from content script
+            chrome.tabs.sendMessage(tab.id, { action: 'getHighlightState' }, (stateResponse) => {
+              if (!chrome.runtime.lastError && stateResponse) {
+                const isEnabled = stateResponse.isHighlightMode || false;
+                const btnText = document.getElementById('highlight-btn-text');
+                if (btnText) {
+                  btnText.textContent = isEnabled ? 'Disable Highlighting' : 'Enable Highlighting';
+                }
+                // Store state
+                chrome.storage.local.set({ [`highlightMode_${tab.id}`]: isEnabled });
+              }
             });
-            // Wait for initialization
-            await new Promise(resolve => setTimeout(resolve, 200));
-          } catch (injectError) {
-            // Content script might already be injected, or page might not allow it
-            console.log('Content script injection result:', injectError.message);
-          }
-        } else {
-          // Content script already loaded, just wait a moment
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
+          });
+        };
 
-        // Send message to content script
-        chrome.tabs.sendMessage(tab.id, { action: 'toggleHighlight' }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.error('Error sending message:', chrome.runtime.lastError);
-            alert('Could not enable highlighting. Please refresh the page and try again.');
-            return;
-          }
-
-          const btnText = document.getElementById('highlight-btn-text');
-          if (btnText) {
-            btnText.textContent = btnText.textContent === 'Enable Highlighting'
-              ? 'Disable Highlighting'
-              : 'Enable Highlighting';
-          }
-        });
+        sendToggleMessage();
       } catch (error) {
         console.error('Error toggling highlight:', error);
         alert('An error occurred. Please refresh the page and try again.');
