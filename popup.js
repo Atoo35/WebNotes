@@ -167,7 +167,6 @@ async function updateHighlightButtonState () {
     console.error('Error updating highlight button state:', error);
   }
 }
-
 function setupEventListeners () {
   // Toggle setup visibility
   const setupLink = document.getElementById('setup-link');
@@ -531,3 +530,4 @@ function setupEventListeners () {
     });
   }
 }
+

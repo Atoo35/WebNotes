@@ -216,20 +216,25 @@ class WebNotesHighlighter {
       handleSave(e);
     }, true);
 
-    // Also add to the menu itself as a fallback
-    menu.addEventListener('click', (e) => {
-      if (e.target.closest('.save-highlight') || e.target === saveButton) {
-        console.log('Menu click handler triggered');
-        handleSave(e);
+
+    // remove menu when clicking/touching anywhere outside it
+    const outsideHandler = (e) => {
+      if (!menu.contains(e.target)) {
+        document.removeEventListener('mousedown', outsideHandler, true);
+        document.removeEventListener('touchstart', outsideHandler, true);
+        menu.remove();
       }
-    }, true);
+    };
+    document.addEventListener('mousedown', outsideHandler, true);
+    document.addEventListener('touchstart', outsideHandler, true);
+
 
     document.body.appendChild(menu);
 
-    console.log('Highlight menu shown at:', menuX, menuY);
-    console.log('Current selection exists:', !!this.currentSelection);
-    console.log('Save button element:', saveButton);
-    console.log('Button clickable:', saveButton ? 'YES' : 'NO');
+    // console.log('Highlight menu shown at:', menuX, menuY);
+    // console.log('Current selection exists:', !!this.currentSelection);
+    // console.log('Save button element:', saveButton);
+    // console.log('Button clickable:', saveButton ? 'YES' : 'NO');
 
 
 
