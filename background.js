@@ -9,6 +9,7 @@ class NotionIntegration {
         this.databaseId = null;
         this.clientId = null;
         this.clientSecret = null;
+        this.rooturl = 'http://localhost:8080/v1'
         this.init();
     }
 
@@ -22,16 +23,7 @@ class NotionIntegration {
         ]);
 
         if (auth.notionAccessToken) {
-            this.accessToken = auth.notionAccessToken;
             this.databaseId = auth.notionDatabaseId;
-        }
-
-        if (auth.notionClientId) {
-            this.clientId = auth.notionClientId;
-        }
-
-        if (auth.notionClientSecret) {
-            this.clientSecret = auth.notionClientSecret;
         }
 
         // Listen for messages from content scripts and popup
@@ -73,11 +65,6 @@ class NotionIntegration {
                     sendResponse({ databaseId: this.databaseId });
                     break;
 
-                case 'setAccessToken':
-                    await this.setAccessToken(request.token);
-                    sendResponse({ success: true });
-                    break;
-
                 case 'setDatabaseId':
                     await this.setDatabaseId(request.databaseId);
                     sendResponse({ success: true });
@@ -98,10 +85,6 @@ class NotionIntegration {
                         hasCredentials: !!(this.clientId && this.clientSecret),
                         hasClientId: !!this.clientId
                     });
-                    break;
-
-                case 'getRedirectUri':
-                    sendResponse({ redirectUri: this.getRedirectUri() });
                     break;
 
                 case 'listDatabases':
@@ -146,6 +129,15 @@ class NotionIntegration {
                         sendResponse({ success: true, highlights });
                     } catch (error) {
                         sendResponse({ success: false, error: error.message || 'Failed to load highlights' });
+                    }
+                    break;
+
+                case 'loadAllHighlightsFromNotion':
+                    try {
+                        const highlights = await this.loadAllHighlightsFromNotion();
+                        sendResponse({ success: true, highlights });
+                    } catch (error) {
+                        sendResponse({ success: false, error: error.message || 'Failed to load all highlights' });
                     }
                     break;
 
@@ -243,111 +235,22 @@ class NotionIntegration {
     }
 
     async saveHighlightToNotion (highlight) {
-        if (!this.accessToken || !this.databaseId) {
-            console.warn('Not authenticated or database not set up');
-            return;
-        }
-
-        // Ensure all required properties exist before saving
-        await this.ensureDatabaseProperties();
 
         try {
-            const response = await fetch(`${this.notionApiUrl}/pages`, {
+            const response = await fetch(`${this.rooturl}/notion/save-highlight`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${this.accessToken}`,
-                    'Content-Type': 'application/json',
-                    'Notion-Version': '2022-06-28'
+                    'Content-Type': 'text/plain'
                 },
                 body: JSON.stringify({
-                    parent: {
-                        database_id: this.databaseId
-                    },
-                    properties: {
-                        'Title': {
-                            title: [
-                                {
-                                    text: {
-                                        content: highlight.text.substring(0, 100) || 'Untitled Highlight'
-                                    }
-                                }
-                            ]
-                        },
-                        'URL': {
-                            url: highlight.url
-                        },
-                        'Page Title': {
-                            rich_text: [
-                                {
-                                    text: {
-                                        content: highlight.title || 'Untitled Page'
-                                    }
-                                }
-                            ]
-                        },
-                        'Domain': {
-                            rich_text: [
-                                {
-                                    text: {
-                                        content: highlight.domain || ''
-                                    }
-                                }
-                            ]
-                        },
-                        'Date': {
-                            date: {
-                                start: highlight.timestamp
-                            }
-                        },
-                        'Highlight ID': {
-                            rich_text: [
-                                {
-                                    text: {
-                                        content: highlight.id
-                                    }
-                                }
-                            ]
-                        },
-                        'Selector': {
-                            rich_text: [
-                                {
-                                    text: {
-                                        content: JSON.stringify(highlight.selector || {})
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    children: [
-                        {
-                            object: 'block',
-                            type: 'paragraph',
-                            paragraph: {
-                                rich_text: [
-                                    {
-                                        type: 'text',
-                                        text: {
-                                            content: highlight.text
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                        {
-                            object: 'block',
-                            type: 'paragraph',
-                            paragraph: {
-                                rich_text: [
-                                    {
-                                        type: 'text',
-                                        text: {
-                                            content: `Source: ${highlight.url}`
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-                    ]
+                    database_id: this.databaseId,
+                    title: highlight.text || 'Untitled Highlight',
+                    page_title: highlight.title,
+                    url: highlight.url,
+                    domain: highlight.domain || '',
+                    date: highlight.timestamp,
+                    highlight_id: highlight.id,
+                    selector: JSON.stringify(highlight.selector || {}),
                 })
             });
 
@@ -374,62 +277,30 @@ class NotionIntegration {
     }
 
     async deleteHighlightFromNotion (highlightId) {
-        if (!this.accessToken || !this.databaseId) {
-            return;
-        }
+        // if (!this.accessToken || !this.databaseId) {
+        //     return;
+        // }
 
         // First, find the page with this highlight ID
         try {
-            const pages = await this.searchPagesByHighlightId(highlightId);
-            for (const page of pages) {
-                await fetch(`${this.notionApiUrl}/pages/${page.id}`, {
-                    method: 'PATCH',
-                    headers: {
-                        'Authorization': `Bearer ${this.accessToken}`,
-                        'Content-Type': 'application/json',
-                        'Notion-Version': '2022-06-28'
-                    },
-                    body: JSON.stringify({
-                        archived: true
-                    })
-                });
-            }
+            const highlight = await this.searchPagesByHighlightId(highlightId);
+            await fetch(`${this.rooturl}/notion/delete-highlight?notion_page_id=${highlight.notion_page_id}`, {
+                method: 'DELETE',
+            });
         } catch (error) {
             console.error('Error deleting from Notion:', error);
         }
     }
 
     async searchPagesByHighlightId (highlightId) {
-        const response = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}/query`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.accessToken}`,
-                'Content-Type': 'application/json',
-                'Notion-Version': '2022-06-28'
-            },
-            body: JSON.stringify({
-                filter: {
-                    property: 'Highlight ID',
-                    rich_text: {
-                        equals: highlightId
-                    }
-                }
-            })
-        });
+        const response = await fetch(`${this.rooturl}/notion/get-highlight-by-id?database_id=${this.databaseId}&highlight_id=${highlightId}`);
 
         if (!response.ok) {
             throw new Error('Failed to search pages');
         }
 
         const data = await response.json();
-        return data.results;
-    }
-
-    async createDatabase (accessToken) {
-        // This will be called after OAuth to create the database
-        // For now, we'll use a manual setup approach
-        // Users will need to create a database manually and provide the ID
-        return null;
+        return data.highlight;
     }
 
     async setAccessToken (token) {
@@ -452,36 +323,19 @@ class NotionIntegration {
     }
 
     async startOAuthFlow () {
-        if (!this.clientId || !this.clientSecret) {
-            return { success: false, error: 'OAuth credentials not configured. Please set up your Client ID and Client Secret first.' };
-        }
-
         try {
-            const redirectUri = this.getRedirectUri();
-            // Normalize redirect URI (remove trailing slash if present)
-            const normalizedRedirectUri = redirectUri.replace(/\/$/, '');
 
-            // Trim credentials to remove any whitespace
-            const trimmedClientId = this.clientId.trim();
-            const trimmedClientSecret = this.clientSecret.trim();
+            const resp = await fetch(`${this.rooturl}/notion/start-oauth`)
 
-            // Log for debugging
-            console.log('Starting OAuth flow with:', {
-                clientId: trimmedClientId ? trimmedClientId.substring(0, 20) + '...' : 'missing',
-                clientIdLength: trimmedClientId?.length,
-                clientSecret: trimmedClientSecret ? trimmedClientSecret.substring(0, 4) + '...' + trimmedClientSecret.substring(trimmedClientSecret.length - 4) : 'missing',
-                clientSecretLength: trimmedClientSecret?.length,
-                redirectUri: normalizedRedirectUri,
-                redirectUriLength: normalizedRedirectUri.length
-            });
+            if (!resp.ok) {
+                console.warn('Could not fetch');
+                return;
+            }
 
-            const authUrl = `${this.notionOAuthUrl}?` +
-                `client_id=${encodeURIComponent(trimmedClientId)}&` +
-                `response_type=code&` +
-                `owner=user&` +
-                `redirect_uri=${encodeURIComponent(normalizedRedirectUri)}`;
+            const res = await resp.json();
+            const authUrl = res.RootURL
 
-            console.log('Authorization URL (sanitized):', authUrl.replace(trimmedClientId, 'CLIENT_ID_HIDDEN'));
+            console.log('Authorization URL (sanitized):', authUrl);
 
             // Launch OAuth flow
             const responseUrl = await chrome.identity.launchWebAuthFlow({
@@ -498,45 +352,9 @@ class NotionIntegration {
             // Extract authorization code from redirect URL
             const url = new URL(responseUrl);
             const code = url.searchParams.get('code');
-            const error = url.searchParams.get('error');
-            const errorDescription = url.searchParams.get('error_description');
-
-            // Extract the redirect_uri from the callback to see what Notion actually used
-            const callbackRedirectUri = url.origin + url.pathname;
-            // Normalize to remove trailing slash to match what we sent in the authorization request
-            const normalizedCallbackUri = callbackRedirectUri.replace(/\/$/, '');
-
-            console.log('=== REDIRECT URI COMPARISON ===');
-            console.log('Callback redirect URI from Notion (raw):', callbackRedirectUri);
-            console.log('Normalized callback URI:', normalizedCallbackUri);
-            console.log('Expected redirect URI (from auth request):', redirectUri);
-            console.log('URIs match after normalization:', normalizedCallbackUri === redirectUri);
-            console.log('Callback has trailing slash:', callbackRedirectUri.endsWith('/'));
-            console.log('Expected has trailing slash:', redirectUri.endsWith('/'));
-
-            if (normalizedCallbackUri !== redirectUri) {
-                console.warn('⚠️ WARNING: Redirect URIs do not match after normalization!');
-            }
-
-            if (error) {
-                return { success: false, error: `OAuth error: ${error}${errorDescription ? ' - ' + errorDescription : ''}` };
-            }
-
-            if (!code) {
-                return { success: false, error: 'No authorization code received' };
-            }
-
-            console.log('Authorization code received, exchanging for token...');
-            console.log('Code length:', code.length, 'Code preview:', code.substring(0, 20) + '...');
-
-            // CRITICAL: Use the SAME redirect URI format as the authorization request (no trailing slash)
-            // This must match exactly what we sent in the authorization request
-            const redirectUriToUse = normalizedCallbackUri; // Use normalized version to match auth request
-            console.log('Using redirect URI for token exchange (normalized):', redirectUriToUse);
-            console.log('=== END REDIRECT URI COMPARISON ===');
 
             // Exchange code for access token - use the same normalized redirect URI as auth request
-            const tokenResult = await this.exchangeCodeForToken(code, redirectUriToUse);
+            const tokenResult = await this.exchangeCodeForToken(code);
             return tokenResult;
 
         } catch (error) {
@@ -547,82 +365,8 @@ class NotionIntegration {
 
     async exchangeCodeForToken (code, redirectUri) {
         try {
-            // Validate credentials are present
-            if (!this.clientId || !this.clientSecret) {
-                return {
-                    success: false,
-                    error: 'OAuth credentials are missing. Please set them up again in the extension popup.'
-                };
-            }
 
-            // Use the redirect URI as-is from the callback (don't normalize - must match exactly what Notion used)
-            // If Notion sent it with a trailing slash, we must use it with the trailing slash
-            const redirectUriToUse = redirectUri; // Use exactly as received from callback
-
-            // Trim credentials to ensure no whitespace
-            const trimmedClientId = this.clientId.trim();
-            const trimmedClientSecret = this.clientSecret.trim();
-
-            console.log('=== TOKEN EXCHANGE REQUEST ===');
-            console.log('Redirect URI being sent (exact from callback):', redirectUriToUse);
-            console.log('Redirect URI has trailing slash:', redirectUriToUse.endsWith('/'));
-
-            // Store redirectUriToUse for error messages
-            const redirectUriForError = redirectUriToUse;
-
-            // Notion requires Basic Authentication with client_id as username and client_secret as password
-            // Base64 encode: client_id:client_secret
-            const basicAuth = btoa(`${trimmedClientId}:${trimmedClientSecret}`);
-
-            const requestBody = {
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: redirectUriToUse // Use exact URI from callback
-            };
-
-            console.log('Token exchange request details:', {
-                grant_type: requestBody.grant_type,
-                code_length: code.length,
-                code_preview: code.substring(0, 20) + '...',
-                redirect_uri: redirectUriToUse,
-                redirect_uri_length: redirectUriToUse.length,
-                redirect_uri_has_trailing_slash: redirectUriToUse.endsWith('/'),
-                redirect_uri_encoded: encodeURIComponent(redirectUriToUse),
-                auth_method: 'Basic Authentication',
-                client_id_length: trimmedClientId.length,
-                client_id_preview: trimmedClientId.substring(0, 20) + '...',
-                client_secret_length: trimmedClientSecret.length
-            });
-
-            // Log the full request body (sanitized) for debugging
-            const sanitizedBody = {
-                grant_type: requestBody.grant_type,
-                code: code.substring(0, 10) + '...',
-                redirect_uri: redirectUriToUse
-            };
-            console.log('Full request body (sanitized):', JSON.stringify(sanitizedBody, null, 2));
-            console.log('Using Basic Auth (client_id:client_secret base64 encoded)');
-
-            // Log the actual URL being called
-            console.log('Token exchange URL:', this.notionTokenUrl);
-
-            const requestOptions = {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Basic ${basicAuth}`
-                },
-                body: JSON.stringify(requestBody)
-            };
-
-            console.log('Making token exchange request:', {
-                url: this.notionTokenUrl,
-                method: requestOptions.method,
-                headers: requestOptions.headers,
-                bodyLength: requestOptions.body.length
-            });
-
-            const response = await fetch(this.notionTokenUrl, requestOptions);
+            const response = await fetch(`${this.rooturl}/notion/get-token?code=${code}`);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -637,11 +381,6 @@ class NotionIntegration {
                     errorText: errorText,
                     requestBody: {
                         grant_type: requestBody.grant_type,
-                        redirect_uri: redirectUriToUse,
-                        redirect_uri_length: redirectUriToUse.length,
-                        client_id_length: trimmedClientId.length,
-                        client_id_first_30: trimmedClientId.substring(0, 30),
-                        client_secret_length: trimmedClientSecret.length
                     },
                     responseHeaders: responseHeaders,
                     requestUrl: this.notionTokenUrl
@@ -662,8 +401,6 @@ class NotionIntegration {
                     if (errorJson.error === 'invalid_client') {
                         errorMessage = 'Invalid OAuth credentials. The Client ID, Client Secret, or Redirect URI don\'t match your Notion integration.\n\n' +
                             '🔍 Debug Info:\n' +
-                            '• Client ID length: ' + trimmedClientId.length + ' chars (starts with: ' + trimmedClientId.substring(0, 15) + '...)\n' +
-                            '• Client Secret length: ' + trimmedClientSecret.length + ' chars\n' +
                             '• Redirect URI used: ' + redirectUriForError + '\n' +
                             '• Redirect URI length: ' + redirectUriForError.length + ' chars\n' +
                             '• Redirect URI has trailing slash: ' + redirectUriForError.endsWith('/') + '\n\n' +
@@ -762,36 +499,9 @@ class NotionIntegration {
     }
 
     async loadHighlightsByDomain (domain) {
-        if (!this.accessToken || !this.databaseId) {
-            console.warn('Not authenticated or database not set up');
-            return [];
-        }
 
         try {
-            // Query all highlights for this domain
-            const response = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}/query`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.accessToken}`,
-                    'Content-Type': 'application/json',
-                    'Notion-Version': '2022-06-28'
-                },
-                body: JSON.stringify({
-                    filter: {
-                        property: 'Domain',
-                        rich_text: {
-                            equals: domain
-                        }
-                    },
-                    sorts: [
-                        {
-                            property: 'Date',
-                            direction: 'descending'
-                        }
-                    ],
-                    page_size: 100
-                })
-            });
+            const response = await fetch(`${this.rooturl}/notion/load-highlights-by-domain?database_id=${this.databaseId}&domain=${domain}`)
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -799,7 +509,7 @@ class NotionIntegration {
             }
 
             const data = await response.json();
-            return this.parseHighlightsFromNotion(data.results || []);
+            return this.parseHighlightsFromNotion(data || []);
 
         } catch (error) {
             console.error('Error loading highlights by domain:', error);
@@ -807,55 +517,24 @@ class NotionIntegration {
         }
     }
 
-    parseHighlightsFromNotion (pages) {
+    parseHighlightsFromNotion (data) {
         const highlights = [];
-
-        for (const page of pages) {
+        for (const highlight of data.highlights) {
             try {
-                const props = page.properties;
-
-                // Extract selector
-                let selector = {};
-                if (props.Selector && props.Selector.rich_text && props.Selector.rich_text.length > 0) {
-                    const selectorText = props.Selector.rich_text[0].text.content;
-                    try {
-                        selector = JSON.parse(selectorText);
-                    } catch (e) {
-                        console.warn('Failed to parse selector:', e);
-                    }
-                }
-
-                // Extract highlight ID
-                let highlightId = '';
-                if (props['Highlight ID'] && props['Highlight ID'].rich_text && props['Highlight ID'].rich_text.length > 0) {
-                    highlightId = props['Highlight ID'].rich_text[0].text.content;
-                }
-
-                // Extract text - try to get from page content blocks first
-                let text = '';
-                // Note: We'll fetch full text when needed, for now use title
-                if (props.Title && props.Title.title && props.Title.title.length > 0) {
-                    text = props.Title.title[0].text.content;
-                }
-
-                // Extract other properties
-                const pageUrl = props.URL?.url || '';
-                const pageTitle = props['Page Title']?.rich_text?.[0]?.text?.content || '';
-                const domain = props.Domain?.rich_text?.[0]?.text?.content || '';
-                const timestamp = props.Date?.date?.start || new Date().toISOString();
-
+                const timestamp = highlight.timestamp * 1000 || new Date().toISOString();
+                const parsed = JSON.parse(highlight.selector)
                 highlights.push({
-                    id: highlightId,
-                    text: text,
-                    url: pageUrl,
-                    title: pageTitle,
-                    domain: domain,
-                    selector: selector,
+                    id: highlight.id,
+                    text: highlight.text,
+                    url: highlight.url,
+                    title: highlight.title,
+                    domain: highlight.domain,
+                    selector: JSON.parse(parsed),
                     timestamp: timestamp,
-                    notionPageId: page.id // Store for later full text fetch
+                    notionPageId: highlight.notion_page_id // Store for later full text fetch
                 });
             } catch (error) {
-                console.error('Error parsing highlight from Notion:', error, page);
+                console.error('Error parsing highlight from Notion:', error);
             }
         }
 
@@ -863,10 +542,6 @@ class NotionIntegration {
     }
 
     async loadHighlightsFromNotion (url, domain) {
-        if (!this.accessToken || !this.databaseId) {
-            console.warn('Not authenticated or database not set up');
-            return [];
-        }
 
         try {
             // First try to get from cache
@@ -874,7 +549,7 @@ class NotionIntegration {
             const cacheResult = await chrome.storage.local.get([cacheKey]);
             const cached = cacheResult[cacheKey];
 
-            if (cached && cached.timestamp && (Date.now() - cached.timestamp < 5 * 60 * 1000)) {
+            if (cached && cached.timestamp && (Date.now() - cached.timestamp < 30000)) {
                 // Cache is less than 5 minutes old, filter by URL and return
                 const filtered = cached.highlights.filter(h => h.url === url);
                 console.log(`Using cached highlights for domain ${domain}, filtered to ${filtered.length} for URL`);
@@ -1076,6 +751,48 @@ class NotionIntegration {
         } catch (error) {
             console.error('Error creating database:', error);
             throw error;
+        }
+    }
+
+    async loadAllHighlightsFromNotion () {
+        if (!this.accessToken || !this.databaseId) {
+            console.warn('Not authenticated or database not set up');
+            return [];
+        }
+        try {
+            // Fetch all highlights from the Notion DB (no domain filter)
+            const highlights = [];
+            let start_cursor = undefined;
+            let has_more = true;
+            while (has_more) {
+                const resp = await fetch(`${this.notionApiUrl}/databases/${this.databaseId}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Content-Type': 'application/json',
+                        'Notion-Version': '2022-06-28'
+                    },
+                    body: JSON.stringify({
+                        sorts: [
+                            { property: 'Date', direction: 'descending' }
+                        ],
+                        page_size: 100,
+                        ...(start_cursor !== undefined ? { start_cursor } : {})
+                    })
+                });
+                if (!resp.ok) {
+                    throw new Error(await resp.text());
+                }
+                const json = await resp.json();
+                const parsed = this.parseHighlightsFromNotion(json.results || []);
+                highlights.push(...parsed);
+                has_more = json.has_more;
+                start_cursor = json.next_cursor;
+            }
+            return highlights;
+        } catch (err) {
+            console.error('Failed to load all highlights from Notion:', err);
+            throw err;
         }
     }
 }

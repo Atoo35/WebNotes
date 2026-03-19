@@ -16,6 +16,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkAuthStatus();
   await updateHighlightButtonState();
   setupEventListeners();
+
+  // chrome.runtime.sendMessage({ action: 'startOAuthFlow' }, (result) => {
+  //   chrome.runtime.onMessage.removeListener(progressListener);
+  //   if (chrome.runtime.lastError) {
+  //     resolve({ success: false, error: chrome.runtime.lastError.message });
+  //   } else {
+  //     resolve(result);
+  //   }
+  // });
 });
 
 async function getRedirectUri () {
@@ -527,6 +536,111 @@ function setupEventListeners () {
         console.error('Error toggling highlight:', error);
         alert('An error occurred. Please refresh the page and try again.');
       }
+    });
+  }
+
+  // === All Highlights UI & Pagination ===
+  const showHighlightsBtn = document.getElementById('show-highlights-list');
+  const allHighlightsSection = document.getElementById('all-highlights-section');
+  const highlightsLoading = document.getElementById('highlights-loading');
+  const highlightsListContainer = document.getElementById('highlights-list-container');
+  const highlightsPrev = document.getElementById('highlights-prev');
+  const highlightsNext = document.getElementById('highlights-next');
+  const highlightsPageInfo = document.getElementById('highlights-page-info');
+  const closeHighlightsBtn = document.getElementById('close-highlights-list');
+
+  let allHighlights = [];
+  let highlightsPage = 1;
+  const HIGHLIGHTS_PER_PAGE = 10;
+
+  /** Render paginated highlights cards */
+  function renderHighlightsPage (page) {
+    console.log('all highlights', allHighlights)
+    if (!allHighlights || allHighlights.length === 0) {
+      highlightsListContainer.innerHTML = '<div style="padding:2em 0;color:#888;text-align:center;">No highlights found.</div>';
+      highlightsPrev.disabled = true;
+      highlightsNext.disabled = true;
+      highlightsPageInfo.textContent = 'Page 1';
+      return;
+    }
+    const totalPages = Math.ceil(allHighlights.length / HIGHLIGHTS_PER_PAGE);
+    page = Math.max(1, Math.min(page, totalPages));
+    highlightsPage = page;
+    highlightsPageInfo.textContent = `Page ${page} of ${totalPages}`;
+    highlightsPrev.disabled = page === 1;
+    highlightsNext.disabled = page === totalPages;
+
+    const highlightsToShow = allHighlights.slice((page - 1) * HIGHLIGHTS_PER_PAGE, page * HIGHLIGHTS_PER_PAGE);
+    const formatTimestamp = (ts) => {
+      if (!ts && ts !== 0) return '';
+      if (typeof ts === 'number') return (ts < 1e12 ? new Date(ts * 1000) : new Date(ts)).toLocaleString();
+      if (typeof ts === 'string') {
+        if (/^\d+$/.test(ts)) {
+          const n = parseInt(ts, 10);
+          return (n < 1e12 ? new Date(n * 1000) : new Date(n)).toLocaleString();
+        }
+        const parsed = Date.parse(ts);
+        if (!isNaN(parsed)) return new Date(parsed).toLocaleString();
+        return ts;
+      }
+      return '';
+    };
+
+    highlightsListContainer.innerHTML = highlightsToShow.map((h) => `
+      <div class="highlight-card" style="background:#fffbe6;border-radius:7px;padding:14px 18px;margin-bottom:14px;box-shadow:0 2px 6px rgba(0,0,0,0.06);border:1px solid #f1eac1;">
+        <div style="font-size:15px;color:#483303;font-weight:500;line-height:1.5;white-space:pre-line;word-break:break-word;">${h.text}</div>
+        <div style="margin-top:7px;color:#765e17;font-size:12px;">
+          <span title="${h.title}"><b>Page:</b> ${h.title}</span><br>
+          <b>Domain:</b> ${h.domain} <br>
+          <b>Date:</b> ${h.timestamp ? formatTimestamp(h.timestamp) : ''}
+          <br><b>URL:</b> <a href="${h.url}" target="_blank" style="color: #977000; word-break: break-all;">open</a>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  /** Fetch all highlights and display UI section */
+  async function showAllHighlightsList () {
+    allHighlightsSection.style.display = '';
+    highlightsLoading.style.display = '';
+    highlightsListContainer.innerHTML = '';
+    // document.querySelector('.container').style.display = 'none';
+    let results = [];
+    try {
+      const resp = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'loadAllHighlightsFromNotion' }, resolve)
+      });
+      console.log('result of all highlights', resp)
+      if (!resp || !resp.success) throw new Error(resp?.error || 'Unknown error loading highlights');
+      results = resp.highlights || [];
+    } catch (e) {
+      highlightsListContainer.innerHTML = `<div style='color:#b71c1c;padding:2em;'>Error loading highlights: ${e.message}
+      </div>`;
+      highlightsLoading.style.display = 'none';
+      return;
+    }
+    allHighlights = results;
+    highlightsLoading.style.display = 'none';
+    renderHighlightsPage(1);
+  }
+  if (showHighlightsBtn) {
+    showHighlightsBtn.addEventListener('click', showAllHighlightsList);
+  }
+  if (closeHighlightsBtn) {
+    closeHighlightsBtn.addEventListener('click', () => {
+      allHighlightsSection.style.display = 'none';
+      document.querySelector('.container').style.display = '';
+    });
+  }
+  if (highlightsPrev) {
+    highlightsPrev.addEventListener('click', () => {
+      if (highlightsPage > 1) renderHighlightsPage(highlightsPage - 1);
+    });
+  }
+  if (highlightsNext) {
+    highlightsNext.addEventListener('click', () => {
+      const totalPages = Math.ceil((allHighlights.length || 1) / HIGHLIGHTS_PER_PAGE);
+      if (highlightsPage < totalPages) renderHighlightsPage(highlightsPage + 1);
     });
   }
 }

@@ -7,6 +7,9 @@ class WebNotesHighlighter {
     this.isHighlightMode = false;
     this.currentSelection = null;
     this.isRestoring = false;
+    this._onMouseUp = this.handleSelection.bind(this);
+    this._selectionTimer = null;
+    this._onSelectionChange = this._handleSelectionChange.bind(this);
     this.init();
   }
 
@@ -36,7 +39,7 @@ class WebNotesHighlighter {
       if (enabled && !this.isHighlightMode) {
         // Enable highlighting mode automatically
         this.isHighlightMode = true;
-        document.addEventListener('mouseup', this.handleSelection.bind(this));
+        document.addEventListener('mouseup', this._onMouseUp);
         document.body.style.cursor = 'text';
       }
     });
@@ -73,31 +76,26 @@ class WebNotesHighlighter {
     });
 
     if (this.isHighlightMode) {
-
-      let selectionTimer = null
-      document.addEventListener('selectionchange', () => {
-        // Clear any previous timer
-        if (selectionTimer) {
-          clearTimeout(selectionTimer);
-        }
-
-        // Set a short timeout. If it fires, the selection is likely stable.
-        selectionTimer = setTimeout(() => {
-          const selection = window.getSelection();
-          if (selection.toString().length > 0) {
-            console.log("Selection is likely complete (timeout reached).");
-            // Call your function here to show a popover or menu
-            this.handleSelection();
-          }
-        }, 200); // 200ms delay is usually sufficient
-
-      }, true);
+      // Add selectionchange handler which debounces stable selection
+      document.addEventListener('selectionchange', this._onSelectionChange, true);
       document.body.style.cursor = 'text';
     } else {
-      document.removeEventListener('mouseup', this.handleSelection.bind(this));
+      document.removeEventListener('mouseup', this._onMouseUp);
+      document.removeEventListener('selectionchange', this._onSelectionChange, true);
       document.body.style.cursor = '';
       this.clearSelectionIndicator();
     }
+  }
+
+  _handleSelectionChange () {
+    // Debounce selectionchange events and call handleSelection on stable selection
+    if (this._selectionTimer) clearTimeout(this._selectionTimer);
+    this._selectionTimer = setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.toString().length > 0) {
+        this.handleSelection();
+      }
+    }, 200);
   }
 
   handleSelection () {
@@ -262,7 +260,9 @@ class WebNotesHighlighter {
         timestamp: this.currentSelection.timestamp,
         domain: new URL(pageUrl).hostname
       };
-
+      if (highlight.text.length > 1000) {
+        console.warn(`Saving very large highlight (length: ${highlight.text.length}) for ${highlight.url}. This may affect matching and highlighting on some pages.`);
+      }
       console.log('Created highlight object:', highlight);
 
       // Store in memory
@@ -334,8 +334,10 @@ class WebNotesHighlighter {
     // Find the text using the selector
     try {
       const range = this.findTextRange(highlight.selector);
+      console.log('range', range)
       if (!range) {
         console.warn('Could not find text to highlight:', highlight.text);
+        console.warn(`Highlight id: ${highlight.id}, text length: ${highlight.text.length}, preview: ${highlight.text.substring(0, 80)}`);
         return;
       }
 
@@ -347,10 +349,58 @@ class WebNotesHighlighter {
       try {
         range.surroundContents(span);
       } catch (e) {
-        // If surroundContents fails, try a different approach
-        const contents = range.extractContents();
-        span.appendChild(contents);
-        range.insertNode(span);
+        // If surroundContents fails, try wrapping text nodes inside range individually
+        console.warn('surroundContents failed, attempting per-node wrap', e);
+        try {
+          const textNodes = [];
+          const root = range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? range.commonAncestorContainer.parentElement : range.commonAncestorContainer;
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+          let node;
+          while (node = walker.nextNode()) {
+            const nodeRange = document.createRange();
+            nodeRange.selectNodeContents(node);
+            if (nodeRange.compareBoundaryPoints(Range.END_TO_START, range) < 0) continue;
+            if (nodeRange.compareBoundaryPoints(Range.START_TO_END, range) > 0) break;
+            textNodes.push(node);
+          }
+
+          for (let tNode of textNodes) {
+            const nodeRange = document.createRange();
+            const start = (tNode === range.startContainer) ? range.startOffset : 0;
+            const end = (tNode === range.endContainer) ? range.endOffset : tNode.textContent.length;
+            if (start >= end) continue;
+            nodeRange.setStart(tNode, start);
+            nodeRange.setEnd(tNode, end);
+            const localSpan = document.createElement('span');
+            localSpan.className = 'webnotes-highlight';
+            localSpan.dataset.highlightId = highlight.id;
+            localSpan.title = `Saved: ${new Date(highlight.timestamp).toLocaleString()}`;
+            try {
+              nodeRange.surroundContents(localSpan);
+            } catch (err2) {
+              // If even this fails, try extract/insert for the nodeRange
+              try {
+                const fragments = nodeRange.extractContents();
+                localSpan.appendChild(fragments);
+                nodeRange.insertNode(localSpan);
+              } catch (err3) {
+                console.error('Failed to wrap nodeRange', err3);
+              }
+            }
+            // Add click handler
+            localSpan.addEventListener('click', (e) => {
+              e.stopPropagation();
+              this.showHighlightActionsMenu(highlight, e);
+            });
+          }
+          return; // done
+        } catch (err) {
+          console.error('Error in per-node wrapping fallback:', err);
+          // Fallback: try extract/insert on whole range
+          const contents = range.extractContents();
+          span.appendChild(contents);
+          range.insertNode(span);
+        }
       }
 
       // Add click handler to show menu
@@ -365,10 +415,10 @@ class WebNotesHighlighter {
 
   findTextRange (selector) {
     try {
+      console.log('selector', selector)
       const searchText = selector.text.trim();
       if (!searchText || searchText.length < 3) return null;
-
-      // Try to find the text in the document
+      // Build an array of text nodes (skipping those inside existing highlights)
       const walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT,
@@ -378,47 +428,128 @@ class WebNotesHighlighter {
             if (node.parentElement?.closest('.webnotes-highlight')) {
               return NodeFilter.FILTER_REJECT;
             }
+            // Skip empty nodes
+            if (!node.textContent || node.textContent.trim().length === 0) return NodeFilter.FILTER_REJECT;
             return NodeFilter.FILTER_ACCEPT;
           }
         }
       );
 
-      let node;
-      while (node = walker.nextNode()) {
+      const textNodes = [];
+      let n;
+      while (n = walker.nextNode()) {
+        textNodes.push(n);
+      }
+
+      // Helper to verify context: ensure before/after snippets appear near match
+      const contextMatches = (text, index) => {
+        if (selector.beforeContext && selector.beforeContext.length > 0) {
+          const beforeText = text.substring(Math.max(0, index - 100), index);
+          const contextSnippet = selector.beforeContext.substring(Math.max(0, selector.beforeContext.length - 30));
+          if (contextSnippet.length > 5 && !beforeText.includes(contextSnippet)) return false;
+        }
+        if (selector.afterContext && selector.afterContext.length > 0) {
+          const afterText = text.substring(index + searchText.length, index + searchText.length + 100);
+          const contextSnippet = selector.afterContext.substring(0, Math.min(30, selector.afterContext.length));
+          if (contextSnippet.length > 5 && !afterText.includes(contextSnippet)) return false;
+        }
+        return true;
+      };
+
+      // Search inside single nodes first (fast path)
+      for (let i = 0; i < textNodes.length; i++) {
+        const node = textNodes[i];
         const text = node.textContent;
-        const index = text.indexOf(searchText);
-
-        if (index !== -1) {
-          // Verify context matches if available (relaxed matching)
-          if (selector.beforeContext && selector.beforeContext.length > 0) {
-            const beforeText = text.substring(Math.max(0, index - 100), index);
-            const contextSnippet = selector.beforeContext.substring(Math.max(0, selector.beforeContext.length - 30));
-            if (contextSnippet.length > 5 && !beforeText.includes(contextSnippet)) {
-              continue;
-            }
+        let idx = text.indexOf(searchText);
+        while (idx !== -1) {
+          console.log('found inside node index', idx, 'nodeText', text.substring(Math.max(0, idx - 30), idx + 30));
+          if (!contextMatches(text, idx)) {
+            idx = text.indexOf(searchText, idx + 1);
+            continue;
           }
-
-          if (selector.afterContext && selector.afterContext.length > 0) {
-            const afterText = text.substring(index + searchText.length, index + searchText.length + 100);
-            const contextSnippet = selector.afterContext.substring(0, Math.min(30, selector.afterContext.length));
-            if (contextSnippet.length > 5 && !afterText.includes(contextSnippet)) {
-              continue;
-            }
-          }
-
-          // Found a match, create range
           const range = document.createRange();
-          range.setStart(node, index);
-          range.setEnd(node, index + searchText.length);
-
-          // Double-check if this range is already highlighted
+          range.setStart(node, idx);
+          range.setEnd(node, idx + searchText.length);
           const container = range.commonAncestorContainer;
           const parent = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
           if (parent?.closest('.webnotes-highlight')) {
-            continue; // Skip if already highlighted
+            idx = text.indexOf(searchText, idx + 1);
+            continue; // Skip already highlighted
           }
-
           return range;
+        }
+      }
+
+      // Multi-node matching: search for occurrences spanning across adjacent text nodes
+      for (let i = 0; i < textNodes.length; i++) {
+        const startNode = textNodes[i];
+        const startText = startNode.textContent;
+        for (let startOffset = 0; startOffset < startText.length; startOffset++) {
+          if (startText[startOffset] !== searchText[0]) continue;
+          // Build concatenated text across subsequent nodes
+          let concat = startText.substring(startOffset);
+          let endNode = startNode;
+          let endOffset = startText.length;
+          let j = i + 1;
+          while (concat.length < searchText.length && j < textNodes.length) {
+            concat += textNodes[j].textContent;
+            endNode = textNodes[j];
+            endOffset = textNodes[j].textContent.length;
+            j++;
+          }
+          if (concat.substring(0, searchText.length) === searchText) {
+            // Confirm context matches
+            let beforeConcat = '';
+            if (startOffset > 0) {
+              const s = startText.substring(Math.max(0, startOffset - 100), startOffset);
+              beforeConcat = s;
+            } else if (i > 0) {
+              const prev = textNodes[i - 1].textContent;
+              beforeConcat = prev.substring(Math.max(0, prev.length - 100));
+            }
+            let afterConcat = '';
+            if (concat.length > searchText.length) {
+              afterConcat = concat.substring(searchText.length, searchText.length + 100);
+            } else if (j < textNodes.length) {
+              afterConcat = textNodes[j].textContent.substring(0, 100);
+            }
+            const combinedText = beforeConcat + concat.substring(0, searchText.length) + afterConcat;
+            // Approximate context check
+            if (!contextMatches(combinedText, beforeConcat.length)) continue;
+
+            // Build range from startNode/startOffset to the calculated end location
+            let remaining = searchText.length;
+            let endNodeIndex = i;
+            let endNodeOffset = startOffset;
+            // consume start node
+            const firstPartLen = startText.length - startOffset;
+            if (firstPartLen >= remaining) {
+              endNodeIndex = i;
+              endNodeOffset = startOffset + remaining;
+            } else {
+              remaining -= firstPartLen;
+              let k = i + 1;
+              while (k < textNodes.length && remaining > 0) {
+                const len = textNodes[k].textContent.length;
+                if (len >= remaining) {
+                  endNodeIndex = k;
+                  endNodeOffset = remaining;
+                  remaining = 0;
+                  break;
+                }
+                remaining -= len;
+                k++;
+              }
+            }
+
+            const range = document.createRange();
+            range.setStart(startNode, startOffset);
+            range.setEnd(textNodes[endNodeIndex], endNodeOffset);
+            const container = range.commonAncestorContainer;
+            const parent = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+            if (parent?.closest('.webnotes-highlight')) continue;
+            return range;
+          }
         }
       }
     } catch (error) {
@@ -440,8 +571,8 @@ class WebNotesHighlighter {
     `;
 
     menu.style.position = 'fixed';
-    menu.style.left = `${event.pageX}px`;
-    menu.style.top = `${event.pageY - 50}px`;
+    menu.style.left = `${event.screenX}px`;
+    menu.style.top = `${event.screenY - 50}px`;
 
     menu.querySelector('.delete-highlight').addEventListener('click', async () => {
       await this.deleteHighlight(highlight.id);
@@ -488,6 +619,8 @@ class WebNotesHighlighter {
     const url = window.location.href;
     const domain = new URL(url).hostname;
 
+    console.log('loading highlights')
+
     // Try to load from Notion first (primary source)
     try {
       const response = await new Promise((resolve) => {
@@ -503,6 +636,9 @@ class WebNotesHighlighter {
           }
         });
       });
+
+
+      console.log('responses loaded', response)
 
       if (response.success && response.highlights) {
         console.dir(response.highlights);
@@ -545,6 +681,7 @@ class WebNotesHighlighter {
 
   restoreHighlights () {
     this.isRestoring = true;
+    console.log('restoreing', this.highlights)
     this.highlights.forEach(highlight => {
       // Check if highlight already exists
       const existing = document.querySelector(`[data-highlight-id="${highlight.id}"]`);

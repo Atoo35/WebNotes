@@ -3,15 +3,11 @@
   "name": "WebNotes - Notion Highlighter",
   "version": "1.0.0",
   "description": "Highlight text on any website and save it to your Notion database",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "identity"
-  ],
+  "permissions": ["storage", "activeTab", "scripting", "identity"],
   "host_permissions": [
     "https://api.notion.com/*",
     "https://www.notion.so/*",
+    "http://localhost:8080/*",
     "<all_urls>"
   ],
   "background": {
@@ -39,4 +35,3 @@
     "128": "icons/icon128.png"
   }
 }
-
