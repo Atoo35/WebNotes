@@ -333,7 +333,11 @@ class WebNotesHighlighter {
   applyHighlight (highlight) {
     // Find the text using the selector
     try {
-      const range = this.findTextRange(highlight.selector);
+      let range = this.findTextRange(highlight.selector, true);
+      if (!range) {
+        console.warn('Strict context match failed, trying loose match for:', highlight.text);
+        range = this.findTextRange(highlight.selector, false);
+      }
       console.log('range', range)
       if (!range) {
         console.warn('Could not find text to highlight:', highlight.text);
@@ -413,9 +417,9 @@ class WebNotesHighlighter {
     }
   }
 
-  findTextRange (selector) {
+  findTextRange (selector, requireContext = true) {
     try {
-      console.log('selector', selector)
+      console.log('selector', selector, 'requireContext', requireContext)
       const searchText = selector.text.trim();
       if (!searchText || searchText.length < 3) return null;
       // Build an array of text nodes (skipping those inside existing highlights)
@@ -443,6 +447,7 @@ class WebNotesHighlighter {
 
       // Helper to verify context: ensure before/after snippets appear near match
       const contextMatches = (text, index) => {
+        if (!requireContext) return true;
         if (selector.beforeContext && selector.beforeContext.length > 0) {
           const beforeText = text.substring(Math.max(0, index - 100), index);
           const contextSnippet = selector.beforeContext.substring(Math.max(0, selector.beforeContext.length - 30));
@@ -515,7 +520,7 @@ class WebNotesHighlighter {
             }
             const combinedText = beforeConcat + concat.substring(0, searchText.length) + afterConcat;
             // Approximate context check
-            if (!contextMatches(combinedText, beforeConcat.length)) continue;
+            if (requireContext && !contextMatches(combinedText, beforeConcat.length)) continue;
 
             // Build range from startNode/startOffset to the calculated end location
             let remaining = searchText.length;
